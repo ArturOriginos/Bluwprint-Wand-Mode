@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "equipment",
+  "ingredients": [
+    { "item": "minecraft:stick" },
+    { "item": "minecraft:paper" }
+  ],
+  "result": { "id": "blueprintwand:blueprint_wand", "count": 1 }
+}

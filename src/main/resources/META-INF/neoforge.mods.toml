@@ -1,0 +1,25 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "MIT"
+
+[[mods]]
+modId = "blueprintwand"
+version = "1.0.0"
+displayName = "Blueprint Wand"
+description = '''
+Жезл чертежей: выделяешь область постройки, командой /schem save сохраняешь её в читаемый текстовый файл (JSON).
+'''
+
+[[dependencies.blueprintwand]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1.0,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.blueprintwand]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1]"
+ordering = "NONE"
+side = "BOTH"
