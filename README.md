@@ -51,22 +51,6 @@
 `layers[i]` — горизонтальный срез на высоте `i` (0 — низ), `rows[j]` — строка `z = j` (0 — север),
 номер символа в строке — `x` (0 — запад). Символ — ключ из `palette`, `.` — воздух.
 
-## Сборка
-
-Нужны JDK 21 и Gradle 8.10+.
-
-```bash
-gradle wrapper        # один раз, создаст gradlew
-./gradlew build       # jar окажется в build/libs/
-./gradlew runClient   # запустить игру для теста
-```
-
-Версия NeoForge задаётся в `build.gradle` (`neoForge { version = ... }`).
-
-## Установка
-
-Положи jar из `build/libs/` в папку `mods` клиента (и сервера, если играешь на сервере) с NeoForge 1.21.1.
-
 ## Лицензия
 
 MIT — см. [LICENSE](LICENSE).
