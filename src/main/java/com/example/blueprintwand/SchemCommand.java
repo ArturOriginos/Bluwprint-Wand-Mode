@@ -8,6 +8,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.SharedConstants;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -36,10 +37,27 @@ public class SchemCommand {
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(ctx -> save(ctx.getSource(), StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("list")
-                        .executes(ctx -> list(ctx.getSource()))));
+                        .executes(ctx -> list(ctx.getSource())))
+                .then(Commands.literal("paste")
+                        .requires(s -> s.hasPermission(2))
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
+                                        BlockPos.containing(ctx.getSource().getPosition()), false))
+                                .then(Commands.literal("with_air")
+                                        .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
+                                                BlockPos.containing(ctx.getSource().getPosition()), true)))
+                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                        .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
+                                                BlockPosArgument.getBlockPos(ctx, "pos"), false))
+                                        .then(Commands.literal("with_air")
+                                                .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
+                                                        BlockPosArgument.getBlockPos(ctx, "pos"), true))))))
+                .then(Commands.literal("undo")
+                        .requires(s -> s.hasPermission(2))
+                        .executes(ctx -> SchemPaste.undo(ctx.getSource()))));
     }
 
-    private static Path dir() {
+    static Path dir() {
         return FMLPaths.GAMEDIR.get().resolve("schematics");
     }
 

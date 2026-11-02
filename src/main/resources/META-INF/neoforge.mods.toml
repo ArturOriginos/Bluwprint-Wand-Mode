@@ -4,7 +4,7 @@ license = "MIT"
 
 [[mods]]
 modId = "blueprintwand"
-version = "1.0.0"
+version = "1.1.0"
 displayName = "Blueprint Wand"
 description = '''
 Жезл чертежей: выделяешь область постройки, командой /schem save сохраняешь её в читаемый текстовый файл (JSON).
