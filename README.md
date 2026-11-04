@@ -1,40 +1,56 @@
 # Blueprint Wand
 
-Мод для **Minecraft 1.21.1 (NeoForge)**. Жезл чертежей выделяет область в мире и сохраняет постройку
-в текстовый JSON-файл, который удобно читать человеку и ИИ (например, Claude).
+🇷🇺 [Русская версия](README.ru.md)
 
-## Возможности
+A **Minecraft 1.21.1 (NeoForge)** mod. The Blueprint Wand selects an area of the world and saves the build
+into a plain-text JSON file that is easy to read for humans and AI assistants (e.g. Claude).
+Saved schematics can be previewed with a frame, rotated and pasted back.
 
-- Предмет «Жезл чертежей» (внешне — зачарованная палка). Крафт: палка + бумага.
-- Выделение двумя точками, область подсвечивается рамкой, пока жезл в руке.
-- Команда `/schem save <имя>` сохраняет область в `schematics/<имя>.json` в папке игры.
-- Команда `/schem list` показывает сохранённые схематики.
-- Команда `/schem paste <имя> [x y z] [with_air]` вставляет схематику из файла, `/schem undo` откатывает последнюю вставку.
-- Сохраняются блоки со всеми свойствами (`facing`, `half`, `waterlogged` и т. д.) и список блоков с данными (сундуки, таблички).
-  Содержимое сундуков, NBT и сущности не сохраняются.
+## Features
 
-## Управление
+- "Blueprint Wand" item (looks like an enchanted stick). Recipe: stick + paper.
+- Two-point selection; the selected area is outlined while you hold the wand.
+- `/schem save <name>` writes `schematics/<name>.json` in the game folder.
+- `/schem preview <name> ...` shows a yellow frame where the schematic will be placed, `/schem confirm` pastes it.
+- Saved schematic names from the `schematics` folder are suggested automatically while typing `/schem paste` and `/schem preview`.
+- `/schem paste <name> ...` pastes immediately, with optional rotation (90 / 180 / 270°).
+- `/schem undo` reverts the last paste.
+- **Schematic List** item (recipe: book + paper): right click to open a screen with every schematic from the folder (with sizes). Pick one, choose rotation, position (where you look / under you) and whether to clear air, press **Preview** (yellow frame), then open the list again and press **Place**. The buttons run the same `/schem` commands, so operator rights are required.
+- Blocks are saved with all their properties (`facing`, `half`, `waterlogged`, ...) plus a list of block-entity positions
+  (chests, signs). Container contents, NBT and entities are not saved.
+- English and Russian translations (`assets/blueprintwand/lang`).
 
-| Действие | Результат |
+## Controls
+
+| Action | Result |
 |---|---|
-| ЛКМ по блоку жезлом | Точка 1 (синяя рамка) |
-| ПКМ по блоку жезлом | Точка 2 (красная рамка) |
-| Shift + ЛКМ | Сбросить выделение |
-| `/schem save <имя>` | Сохранить область |
-| `/schem list` | Список схематик |
-| `/schem paste <имя>` | Вставить схематику: её юго-западный нижний угол (минимальные x, y, z) ставится в блок под тобой |
-| `/schem paste <имя> <x y z>` | То же, но в указанную точку (можно `~ ~ ~`) |
-| `/schem paste <имя> ... with_air` | Воздух из схематики тоже вставляется, то есть область очищается |
-| `/schem undo` | Откатить последнюю вставку |
+| Left click a block with the wand | Point 1 (blue frame) |
+| Right click a block with the wand | Point 2 (red frame) |
+| Shift + left click | Clear the selection |
 
-Зелёная рамка с заливкой показывает всю территорию, которая будет сохранена.
-Максимальный размер области — 1 000 000 блоков.
+The green frame is the whole area that will be saved. Maximum size: 1,000,000 blocks.
 
-Вставка и откат требуют прав оператора (уровень 2; в одиночной игре — включённые читы). При вставке блоки ставятся без обновления соседей,
-поэтому ничего не отваливается и не падает. Блоки из отсутствующих модов пропускаются, их список выводится в чат.
-Откат не восстанавливает содержимое сундуков и другие данные блоков.
+## Commands
 
-## Формат файла
+| Command | Description |
+|---|---|
+| `/schem save <name>` | Save the selected area |
+| `/schem list` | List saved schematics |
+| `/schem preview <name> [r90\|r180\|r270] [x y z] [with_air]` | Show a yellow preview frame (re-run it to move or rotate) |
+| `/schem confirm` / `/schem cancel` | Paste the previewed schematic / drop the preview |
+| `/schem paste <name> [r90\|r180\|r270] [x y z] [with_air]` | Paste right away |
+| `/schem undo` | Undo the last paste |
+
+- The schematic's minimum corner (lowest x, y, z) is placed at the target position, which defaults to the block you stand in.
+  Coordinates can be relative (`~ ~ ~`) or the `origin_world` values from the file.
+- Rotation turns the build clockwise; block states (stairs, doors, ...) are rotated with it.
+- `with_air` also pastes the air blocks of the schematic, clearing the area. Without it air is skipped.
+- Pasting, preview and undo need operator rights (permission level 2; in singleplayer, cheats enabled).
+- Blocks are placed without neighbour updates, so nothing pops off or falls during the paste.
+  Blocks from missing mods are skipped and listed in chat.
+- Undo does not restore chest contents or other block data.
+
+## File format
 
 ```json
 {
@@ -48,30 +64,37 @@
 }
 ```
 
-`layers[i]` — горизонтальный срез на высоте `i` (0 — низ), `rows[j]` — строка `z = j` (0 — север),
-номер символа в строке — `x` (0 — запад). Символ — ключ из `palette`, `.` — воздух.
+`layers[i]` is the horizontal slice at height `i` (0 = bottom), `rows[j]` is the row `z = j` (0 = north),
+the character index in a row is `x` (0 = west). Each character is a key of `palette`; `.` is air.
 
-## Сборка
+Tip: send the `.json` to an AI assistant to review or redesign the build, then paste the edited file back.
+Keep `size`, the number of layers and the length of every row consistent.
 
-Нужны JDK 21 и Gradle 8.10+.
+## Building
+
+Requires JDK 21 and Gradle 8.10+.
 
 ```bash
-gradle wrapper        # один раз, создаст gradlew
-./gradlew build       # jar окажется в build/libs/
-./gradlew runClient   # запустить игру для теста
+gradle wrapper        # once, creates gradlew
+./gradlew build       # the jar appears in build/libs/
+./gradlew runClient   # launch the game for testing
 ```
 
-Версия NeoForge задаётся в `build.gradle` (`neoForge { version = ... }`).
+The NeoForge version is set in `build.gradle` (`neoForge { version = ... }`).
 
-## Установка
+## Installation
 
-Положи jar из `build/libs/` в папку `mods` клиента (и сервера, если играешь на сервере) с NeoForge 1.21.1.
+Put the jar from `build/libs/` into the `mods` folder of the client (and of the server, if you play on one).
+The mod is required on both sides (NeoForge 1.21.1).
 
-## Лицензия
+## Changelog
 
-MIT — см. [LICENSE](LICENSE).
+- **1.3.0** — "Schematic List" item: a GUI with all saved schematics, rotation / position options, preview and paste.
+- **1.2.1** — saved schematic names are suggested (Tab) in `/schem paste` and `/schem preview`.
+- **1.2.0** — rotation, frame preview (`/schem preview`, `/schem confirm`, `/schem cancel`), English translation.
+- **1.1.0** — `/schem paste` and `/schem undo`.
+- **1.0.0** — wand, selection, `/schem save`, `/schem list`.
 
-## История версий
+## License
 
-- **1.1.0** — команды `/schem paste` и `/schem undo`.
-- **1.0.0** — жезл, выделение, `/schem save`, `/schem list`.
+MIT — see [LICENSE](LICENSE).

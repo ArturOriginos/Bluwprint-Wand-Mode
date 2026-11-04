@@ -4,14 +4,19 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import net.minecraft.SharedConstants;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -19,17 +24,25 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.neoforged.fml.loading.FMLPaths;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public class SchemCommand {
-    private static final long MAX_BLOCKS = 1_000_000L;
+    static final long MAX_BLOCKS = 1_000_000L;
     private static final String POOL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#$%&*+=?@^~<>()[]{}!;:/|";
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+
+    @FunctionalInterface
+    interface Action {
+        int run(CommandSourceStack src, String name, int rotation, BlockPos pos, boolean withAir) throws CommandSyntaxException;
+    }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("schem")
@@ -38,23 +51,101 @@ public class SchemCommand {
                                 .executes(ctx -> save(ctx.getSource(), StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("list")
                         .executes(ctx -> list(ctx.getSource())))
-                .then(Commands.literal("paste")
+                .then(pasteTree("paste", SchemPaste::paste))
+                .then(pasteTree("preview", SchemPaste::preview))
+                .then(Commands.literal("confirm")
                         .requires(s -> s.hasPermission(2))
-                        .then(Commands.argument("name", StringArgumentType.word())
-                                .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
-                                        BlockPos.containing(ctx.getSource().getPosition()), false))
-                                .then(Commands.literal("with_air")
-                                        .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
-                                                BlockPos.containing(ctx.getSource().getPosition()), true)))
-                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                                        .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
-                                                BlockPosArgument.getBlockPos(ctx, "pos"), false))
-                                        .then(Commands.literal("with_air")
-                                                .executes(ctx -> SchemPaste.paste(ctx.getSource(), StringArgumentType.getString(ctx, "name"),
-                                                        BlockPosArgument.getBlockPos(ctx, "pos"), true))))))
+                        .executes(ctx -> SchemPaste.confirm(ctx.getSource())))
+                .then(Commands.literal("cancel")
+                        .requires(s -> s.hasPermission(2))
+                        .executes(ctx -> SchemPaste.cancel(ctx.getSource())))
                 .then(Commands.literal("undo")
                         .requires(s -> s.hasPermission(2))
                         .executes(ctx -> SchemPaste.undo(ctx.getSource()))));
+    }
+
+    /** /schem <word> <name> [r90|r180|r270] [x y z] [with_air] */
+    private static LiteralArgumentBuilder<CommandSourceStack> pasteTree(String word, Action action) {
+        RequiredArgumentBuilder<CommandSourceStack, String> name = Commands.argument("name", StringArgumentType.word())
+                .suggests(SCHEMATICS);
+        addTail(name, action, 0);
+        for (int rot : new int[]{90, 180, 270}) {
+            LiteralArgumentBuilder<CommandSourceStack> r = Commands.literal("r" + rot);
+            addTail(r, action, rot);
+            name.then(r);
+        }
+        return Commands.literal(word).requires(s -> s.hasPermission(2)).then(name);
+    }
+
+    private static void addTail(ArgumentBuilder<CommandSourceStack, ?> node, Action action, int rot) {
+        node.executes(c -> action.run(c.getSource(), nameOf(c), rot, here(c), false));
+        node.then(Commands.literal("with_air")
+                .executes(c -> action.run(c.getSource(), nameOf(c), rot, here(c), true)));
+        node.then(Commands.argument("pos", BlockPosArgument.blockPos())
+                .executes(c -> action.run(c.getSource(), nameOf(c), rot, BlockPosArgument.getBlockPos(c, "pos"), false))
+                .then(Commands.literal("with_air")
+                        .executes(c -> action.run(c.getSource(), nameOf(c), rot, BlockPosArgument.getBlockPos(c, "pos"), true))));
+    }
+
+    private static String nameOf(CommandContext<CommandSourceStack> c) {
+        return StringArgumentType.getString(c, "name");
+    }
+
+    private static BlockPos here(CommandContext<CommandSourceStack> c) {
+        return BlockPos.containing(c.getSource().getPosition());
+    }
+
+    /** Подсказки: имена всех сохранённых схематик из папки schematics (без .json). */
+    private static final SuggestionProvider<CommandSourceStack> SCHEMATICS = (ctx, builder) -> {
+        List<String> names = new ArrayList<>();
+        try (Stream<Path> files = Files.list(dir())) {
+            files.map(p -> p.getFileName().toString())
+                    .filter(n -> n.endsWith(".json"))
+                    .map(n -> n.substring(0, n.length() - ".json".length()))
+                    .sorted()
+                    .forEach(names::add);
+        } catch (IOException ignored) {
+            // папки ещё нет — подсказок нет
+        }
+        return SharedSuggestionProvider.suggest(names, builder);
+    };
+
+    private static final Pattern SIZE = Pattern.compile("\"size\":\\s*\\{\\s*\"x\":\\s*(\\d+),\\s*\"y\":\\s*(\\d+),\\s*\"z\":\\s*(\\d+)");
+    private static final Pattern NON_AIR = Pattern.compile("\"non_air_blocks\":\\s*(\\d+)");
+
+    /** Все схематики из папки schematics с размерами (читаем только начало файла). */
+    static List<SchematicListPayload.Entry> listEntries() {
+        List<SchematicListPayload.Entry> result = new ArrayList<>();
+        try (Stream<Path> files = Files.list(dir())) {
+            List<Path> sorted = files.filter(p -> p.getFileName().toString().endsWith(".json")).sorted().limit(200).toList();
+            for (Path file : sorted) {
+                String fn = file.getFileName().toString();
+                String name = fn.substring(0, fn.length() - ".json".length());
+                if (!name.matches("[A-Za-z0-9_\\-]+")) continue; // такие имена нельзя ввести в команду
+                int sx = 0, sy = 0, sz = 0, blocks = 0;
+                try (BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                    char[] buf = new char[1500];
+                    int n = r.read(buf);
+                    String head = new String(buf, 0, Math.max(n, 0));
+                    Matcher m = SIZE.matcher(head);
+                    if (m.find()) {
+                        sx = Integer.parseInt(m.group(1));
+                        sy = Integer.parseInt(m.group(2));
+                        sz = Integer.parseInt(m.group(3));
+                    }
+                    Matcher b = NON_AIR.matcher(head);
+                    if (b.find()) {
+                        blocks = (int) Math.min(Integer.MAX_VALUE, Long.parseLong(b.group(1)));
+                    }
+                } catch (IOException | RuntimeException ignored) {
+                    // оставляем нули — проект всё равно покажем
+                }
+                result.add(new SchematicListPayload.Entry(name, sx, sy, sz, blocks));
+            }
+        } catch (IOException ignored) {
+            // папки ещё нет
+        }
+        return result;
     }
 
     static Path dir() {
@@ -66,12 +157,12 @@ public class SchemCommand {
             Files.createDirectories(dir());
             try (Stream<Path> s = Files.list(dir())) {
                 List<String> names = s.map(p -> p.getFileName().toString()).filter(n -> n.endsWith(".json")).sorted().toList();
-                src.sendSuccess(() -> Component.literal(names.isEmpty()
-                        ? "Схематик пока нет. Папка: " + dir()
-                        : "Схематики (" + dir() + "):\n" + String.join("\n", names)), false);
+                src.sendSuccess(() -> names.isEmpty()
+                        ? Msg.t("cmd.list_empty", dir().toString())
+                        : Msg.t("cmd.list", dir().toString(), String.join("\n", names)), false);
             }
         } catch (IOException e) {
-            src.sendFailure(Component.literal("Ошибка: " + e.getMessage()));
+            src.sendFailure(Msg.t("cmd.error", String.valueOf(e.getMessage())));
         }
         return 1;
     }
@@ -80,17 +171,17 @@ public class SchemCommand {
         ServerPlayer player = src.getPlayerOrException();
         Selection sel = Selection.peek(player.getUUID());
         if (sel == null || !sel.complete()) {
-            src.sendFailure(Component.literal("Сначала выдели область жезлом: ЛКМ — точка 1, ПКМ — точка 2."));
+            src.sendFailure(Msg.t("cmd.no_selection"));
             return 0;
         }
         ServerLevel level = player.serverLevel();
         if (sel.dim != level.dimension()) {
-            src.sendFailure(Component.literal("Выделение сделано в другом измерении."));
+            src.sendFailure(Msg.t("cmd.other_dimension"));
             return 0;
         }
         long volume = sel.volume();
         if (volume > MAX_BLOCKS) {
-            src.sendFailure(Component.literal("Слишком большая область: " + volume + " блоков (максимум " + MAX_BLOCKS + ")."));
+            src.sendFailure(Msg.t("cmd.too_big", volume, MAX_BLOCKS));
             return 0;
         }
 
@@ -163,10 +254,9 @@ public class SchemCommand {
             Path file = dir().resolve(name + ".json");
             Files.writeString(file, out.toString(), StandardCharsets.UTF_8);
             final long count = nonAir;
-            src.sendSuccess(() -> Component.literal("Схематика «" + name + "» сохранена: " + sx + "×" + sy + "×" + sz
-                    + ", блоков: " + count + "\n" + file), false);
+            src.sendSuccess(() -> Msg.t("cmd.saved", name, sx, sy, sz, count, file.toString()), false);
         } catch (IOException e) {
-            src.sendFailure(Component.literal("Не удалось записать файл: " + e.getMessage()));
+            src.sendFailure(Msg.t("cmd.write_failed", String.valueOf(e.getMessage())));
             return 0;
         }
         return 1;

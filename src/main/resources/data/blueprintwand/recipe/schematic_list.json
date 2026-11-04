@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "equipment",
+  "ingredients": [
+    { "item": "minecraft:book" },
+    { "item": "minecraft:paper" }
+  ],
+  "result": { "id": "blueprintwand:schematic_list", "count": 1 }
+}

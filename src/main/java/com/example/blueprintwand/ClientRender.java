@@ -16,7 +16,11 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** Рисует рамку выделения, пока жезл в руке. Это и есть «территория, которая будет сохранена». */
+/**
+ * Рамки:
+ *  - зелёная — выделенная область (пока жезл в руке), синяя/красная — точки 1 и 2;
+ *  - жёлтая — предпросмотр вставки (/schem preview), видна всегда, пока не /schem confirm или /schem cancel.
+ */
 @EventBusSubscriber(modid = BlueprintWand.MODID, value = Dist.CLIENT)
 public class ClientRender {
 
@@ -27,10 +31,17 @@ public class ClientRender {
         Minecraft mc = Minecraft.getInstance();
         Player player = mc.player;
         if (player == null || mc.level == null) return;
-        if (!(player.getMainHandItem().getItem() instanceof WandItem) && !(player.getOffhandItem().getItem() instanceof WandItem)) return;
 
-        Selection sel = Selection.peek(player.getUUID());
-        if (sel == null || sel.dim != mc.level.dimension()) return;
+        boolean holding = player.getMainHandItem().getItem() instanceof WandItem
+                || player.getOffhandItem().getItem() instanceof WandItem;
+
+        Selection sel = holding ? Selection.peek(player.getUUID()) : null;
+        if (sel != null && sel.dim != mc.level.dimension()) sel = null;
+
+        PreviewPayload pv = PreviewPayload.current;
+        if (pv != null && !pv.dim().equals(mc.level.dimension().location())) pv = null;
+
+        if (sel == null && pv == null) return;
 
         PoseStack ps = event.getPoseStack();
         Vec3 cam = event.getCamera().getPosition();
@@ -39,21 +50,27 @@ public class ClientRender {
         ps.pushPose();
         ps.translate(-cam.x, -cam.y, -cam.z);
 
-        if (sel.complete()) {
-            BlockPos a = sel.min(), b = sel.max();
-            AABB box = new AABB(a.getX(), a.getY(), a.getZ(), b.getX() + 1, b.getY() + 1, b.getZ() + 1).inflate(0.003);
-            // полупрозрачная заливка
-            DebugRenderer.renderFilledBox(ps, buf, box, 0.2f, 0.9f, 0.4f, 0.12f);
-            // контур области
+        if (sel != null) {
+            if (sel.complete()) {
+                BlockPos a = sel.min(), b = sel.max();
+                AABB box = new AABB(a.getX(), a.getY(), a.getZ(), b.getX() + 1, b.getY() + 1, b.getZ() + 1).inflate(0.003);
+                DebugRenderer.renderFilledBox(ps, buf, box, 0.2f, 0.9f, 0.4f, 0.12f);
+                LevelRenderer.renderLineBox(ps, buf.getBuffer(RenderType.lines()), box, 0.2f, 1.0f, 0.4f, 1.0f);
+            }
             VertexConsumer lines = buf.getBuffer(RenderType.lines());
-            LevelRenderer.renderLineBox(ps, lines, box, 0.2f, 1.0f, 0.4f, 1.0f);
+            if (sel.pos1 != null) {
+                LevelRenderer.renderLineBox(ps, lines, new AABB(sel.pos1).inflate(0.01), 0.2f, 0.5f, 1.0f, 1.0f);
+            }
+            if (sel.pos2 != null) {
+                LevelRenderer.renderLineBox(ps, lines, new AABB(sel.pos2).inflate(0.01), 1.0f, 0.3f, 0.3f, 1.0f);
+            }
         }
-        VertexConsumer lines = buf.getBuffer(RenderType.lines());
-        if (sel.pos1 != null) {
-            LevelRenderer.renderLineBox(ps, lines, new AABB(sel.pos1).inflate(0.01), 0.2f, 0.5f, 1.0f, 1.0f); // синяя — точка 1
-        }
-        if (sel.pos2 != null) {
-            LevelRenderer.renderLineBox(ps, lines, new AABB(sel.pos2).inflate(0.01), 1.0f, 0.3f, 0.3f, 1.0f); // красная — точка 2
+
+        if (pv != null) {
+            BlockPos o = pv.origin();
+            AABB box = new AABB(o.getX(), o.getY(), o.getZ(), o.getX() + pv.sx(), o.getY() + pv.sy(), o.getZ() + pv.sz()).inflate(0.004);
+            DebugRenderer.renderFilledBox(ps, buf, box, 1.0f, 0.8f, 0.1f, 0.14f);
+            LevelRenderer.renderLineBox(ps, buf.getBuffer(RenderType.lines()), box, 1.0f, 0.85f, 0.1f, 1.0f);
         }
 
         ps.popPose();

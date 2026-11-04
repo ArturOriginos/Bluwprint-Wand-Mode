@@ -25,9 +25,9 @@ public class WandItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.literal("ЛКМ по блоку — точка 1").withStyle(ChatFormatting.GRAY));
-        tooltip.add(Component.literal("ПКМ по блоку — точка 2").withStyle(ChatFormatting.GRAY));
-        tooltip.add(Component.literal("Shift + ЛКМ — сбросить выделение").withStyle(ChatFormatting.GRAY));
-        tooltip.add(Component.literal("/schem save <имя> — сохранить").withStyle(ChatFormatting.AQUA));
+        tooltip.add(Msg.t("tooltip.point1").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Msg.t("tooltip.point2").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Msg.t("tooltip.reset").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Msg.t("tooltip.save").withStyle(ChatFormatting.AQUA));
     }
 }

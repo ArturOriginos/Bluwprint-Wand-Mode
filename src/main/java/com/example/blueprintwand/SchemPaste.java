@@ -10,14 +10,16 @@ import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -26,31 +28,106 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Вставка схематик из schematics/<имя>.json и откат последней вставки. */
+/** Предпросмотр, вставка (с поворотом) и откат схематик из schematics/<имя>.json. */
 public class SchemPaste {
-    private static final long MAX_BLOCKS = 1_000_000L;
     /** 2 = отправить клиентам, 16 = без обновления соседей (ничего не отваливается и не падает). */
     private static final int FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
 
+    private record Schematic(String name, int sx, int sy, int sz, String[][] grid,
+                             Map<Character, BlockState> palette, Set<String> missing) {}
+
+    private record Pending(String name, BlockPos origin, int rotation, boolean withAir, ResourceKey<Level> dim) {}
+
     private record Undo(ResourceKey<Level> dim, List<BlockPos> positions, List<BlockState> states) {}
 
+    private static final Map<UUID, Pending> PENDING = new ConcurrentHashMap<>();
     private static final Map<UUID, Undo> UNDO = new ConcurrentHashMap<>();
 
-    public static int paste(CommandSourceStack src, String rawName, BlockPos origin, boolean withAir) throws CommandSyntaxException {
+    // ---------------------------------------------------------------- команды
+
+    public static int paste(CommandSourceStack src, String rawName, int rotation, BlockPos origin, boolean withAir) throws CommandSyntaxException {
         ServerPlayer player = src.getPlayerOrException();
         ServerLevel level = src.getLevel();
+        Schematic s = load(src, level, rawName);
+        if (s == null) return 0;
+        return place(src, player, level, s, origin, rotation, withAir);
+    }
 
+    public static int preview(CommandSourceStack src, String rawName, int rotation, BlockPos origin, boolean withAir) throws CommandSyntaxException {
+        ServerPlayer player = src.getPlayerOrException();
+        ServerLevel level = src.getLevel();
+        Schematic s = load(src, level, rawName);
+        if (s == null) return 0;
+
+        boolean swap = rotation == 90 || rotation == 270;
+        int rsx = swap ? s.sz() : s.sx();
+        int rsz = swap ? s.sx() : s.sz();
+
+        PENDING.put(player.getUUID(), new Pending(s.name(), origin, rotation, withAir, level.dimension()));
+        PacketDistributor.sendToPlayer(player, new PreviewPayload(true, level.dimension().location(), origin, rsx, s.sy(), rsz));
+        src.sendSuccess(() -> Msg.t("cmd.preview", s.name(), origin.getX(), origin.getY(), origin.getZ(), rsx, s.sy(), rsz), false);
+        return 1;
+    }
+
+    public static int confirm(CommandSourceStack src) throws CommandSyntaxException {
+        ServerPlayer player = src.getPlayerOrException();
+        Pending p = PENDING.remove(player.getUUID());
+        if (p == null) {
+            return fail(src, Msg.t("cmd.no_preview"));
+        }
+        PacketDistributor.sendToPlayer(player, PreviewPayload.clear());
+        ServerLevel level = src.getLevel();
+        if (level.dimension() != p.dim()) {
+            return fail(src, Msg.t("cmd.preview_dimension"));
+        }
+        Schematic s = load(src, level, p.name());
+        if (s == null) return 0;
+        return place(src, player, level, s, p.origin(), p.rotation(), p.withAir());
+    }
+
+    public static int cancel(CommandSourceStack src) throws CommandSyntaxException {
+        ServerPlayer player = src.getPlayerOrException();
+        PENDING.remove(player.getUUID());
+        PacketDistributor.sendToPlayer(player, PreviewPayload.clear());
+        src.sendSuccess(() -> Msg.t("cmd.cancelled"), false);
+        return 1;
+    }
+
+    public static int undo(CommandSourceStack src) throws CommandSyntaxException {
+        ServerPlayer player = src.getPlayerOrException();
+        Undo u = UNDO.remove(player.getUUID());
+        if (u == null) {
+            return fail(src, Msg.t("cmd.undo_nothing"));
+        }
+        ServerLevel level = src.getServer().getLevel(u.dim());
+        if (level == null) {
+            return fail(src, Msg.t("cmd.undo_dimension"));
+        }
+        for (int i = u.positions().size() - 1; i >= 0; i--) {
+            level.setBlock(u.positions().get(i), u.states().get(i), FLAGS);
+        }
+        final int n = u.positions().size();
+        src.sendSuccess(() -> Msg.t("cmd.undone", n), true);
+        return 1;
+    }
+
+    // ---------------------------------------------------------------- загрузка
+
+    /** Читает и проверяет файл. При ошибке сам отправляет сообщение и возвращает null. */
+    private static Schematic load(CommandSourceStack src, ServerLevel level, String rawName) {
         String name = rawName.replaceAll("[^A-Za-z0-9_\\-]", "_");
         Path file = SchemCommand.dir().resolve(name + ".json");
         if (!Files.exists(file)) {
-            return fail(src, "Файл не найден: " + file + ". Список: /schem list");
+            fail(src, Msg.t("cmd.not_found", file.toString()));
+            return null;
         }
 
         JsonObject root;
         try {
             root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8)).getAsJsonObject();
         } catch (IOException | RuntimeException e) {
-            return fail(src, "Не удалось прочитать файл: " + e.getMessage());
+            fail(src, Msg.t("cmd.read_failed", String.valueOf(e.getMessage())));
+            return null;
         }
 
         int sx, sy, sz;
@@ -58,7 +135,8 @@ public class SchemPaste {
         JsonObject paletteJson;
         try {
             if (!root.has("format") || !"blueprintwand-1".equals(root.get("format").getAsString())) {
-                return fail(src, "Неизвестный формат файла (ожидается blueprintwand-1).");
+                fail(src, Msg.t("cmd.bad_format"));
+                return null;
             }
             JsonObject size = root.getAsJsonObject("size");
             sx = size.get("x").getAsInt();
@@ -67,50 +145,84 @@ public class SchemPaste {
             layers = root.getAsJsonArray("layers");
             paletteJson = root.getAsJsonObject("palette");
         } catch (RuntimeException e) {
-            return fail(src, "Файл повреждён: нет size / layers / palette.");
+            fail(src, Msg.t("cmd.corrupt"));
+            return null;
         }
-        if ((long) sx * sy * sz > MAX_BLOCKS) {
-            return fail(src, "Слишком большая схематика (максимум " + MAX_BLOCKS + " блоков).");
+        if (sx <= 0 || sy <= 0 || sz <= 0 || (long) sx * sy * sz > SchemCommand.MAX_BLOCKS) {
+            fail(src, Msg.t("cmd.paste_too_big", SchemCommand.MAX_BLOCKS));
+            return null;
         }
 
-        // Палитра: символ -> состояние блока. Неизвестные блоки (например, из отсутствующего мода) пропускаем.
+        // Палитра: символ -> состояние. Неизвестные блоки (например, из отсутствующего мода) пропускаем.
         HolderLookup<Block> blocks = level.registryAccess().lookupOrThrow(Registries.BLOCK);
         Map<Character, BlockState> palette = new HashMap<>();
         Set<String> missing = new LinkedHashSet<>();
-        for (Map.Entry<String, JsonElement> e : paletteJson.entrySet()) {
-            if (e.getKey().length() != 1) continue;
-            char key = e.getKey().charAt(0);
-            if (key == '.') {
-                palette.put('.', Blocks.AIR.defaultBlockState());
-                continue;
+        try {
+            for (Map.Entry<String, JsonElement> e : paletteJson.entrySet()) {
+                if (e.getKey().length() != 1) continue;
+                char key = e.getKey().charAt(0);
+                if (key == '.') continue;
+                String id = e.getValue().getAsString();
+                try {
+                    palette.put(key, BlockStateParser.parseForBlock(blocks, id, false).blockState());
+                } catch (CommandSyntaxException ex) {
+                    missing.add(id);
+                }
             }
-            String id = e.getValue().getAsString();
-            try {
-                palette.put(key, BlockStateParser.parseForBlock(blocks, id, false).blockState());
-            } catch (CommandSyntaxException ex) {
-                missing.add(id);
-            }
+        } catch (RuntimeException e) {
+            fail(src, Msg.t("cmd.corrupt"));
+            return null;
         }
-        palette.putIfAbsent('.', Blocks.AIR.defaultBlockState());
+        palette.put('.', Blocks.AIR.defaultBlockState());
 
         // Проверка размеров до начала вставки, чтобы не оставить недоделанную постройку.
         if (layers.size() != sy) {
-            return fail(src, "Файл повреждён: число слоёв " + layers.size() + " != " + sy);
+            fail(src, Msg.t("cmd.corrupt_layers", layers.size(), sy));
+            return null;
         }
-        List<String[]> grid = new ArrayList<>(sy);
+        String[][] grid = new String[sy][];
         for (int y = 0; y < sy; y++) {
-            JsonArray rows = layers.get(y).getAsJsonObject().getAsJsonArray("rows");
-            if (rows.size() != sz) {
-                return fail(src, "Файл повреждён: слой " + y + " имеет " + rows.size() + " строк вместо " + sz);
+            JsonArray rows;
+            try {
+                rows = layers.get(y).getAsJsonObject().getAsJsonArray("rows");
+            } catch (RuntimeException e) {
+                fail(src, Msg.t("cmd.corrupt"));
+                return null;
             }
-            String[] r = new String[sz];
+            if (rows.size() != sz) {
+                fail(src, Msg.t("cmd.corrupt_rows", y, rows.size(), sz));
+                return null;
+            }
+            grid[y] = new String[sz];
             for (int z = 0; z < sz; z++) {
-                r[z] = rows.get(z).getAsString();
-                if (r[z].length() != sx) {
-                    return fail(src, "Файл повреждён: слой " + y + ", строка " + z + " имеет длину " + r[z].length() + " вместо " + sx);
+                grid[y][z] = rows.get(z).getAsString();
+                if (grid[y][z].length() != sx) {
+                    fail(src, Msg.t("cmd.corrupt_len", y, z, grid[y][z].length(), sx));
+                    return null;
                 }
             }
-            grid.add(r);
+        }
+        return new Schematic(name, sx, sy, sz, grid, palette, missing);
+    }
+
+    // ---------------------------------------------------------------- вставка
+
+    private static int place(CommandSourceStack src, ServerPlayer player, ServerLevel level, Schematic s,
+                             BlockPos origin, int rotation, boolean withAir) {
+        Rotation rot = switch (rotation) {
+            case 90 -> Rotation.CLOCKWISE_90;
+            case 180 -> Rotation.CLOCKWISE_180;
+            case 270 -> Rotation.COUNTERCLOCKWISE_90;
+            default -> Rotation.NONE;
+        };
+        int sx = s.sx(), sy = s.sy(), sz = s.sz();
+        boolean swap = rotation == 90 || rotation == 270;
+        int rsx = swap ? sz : sx;
+        int rsz = swap ? sx : sz;
+
+        Map<Character, BlockState> palette = new HashMap<>();
+        for (Map.Entry<Character, BlockState> e : s.palette().entrySet()) {
+            palette.put(e.getKey(), e.getValue().rotate(rot));
         }
 
         List<BlockPos> undoPos = new ArrayList<>();
@@ -119,9 +231,8 @@ public class SchemPaste {
         long placed = 0, unknown = 0;
 
         for (int y = 0; y < sy; y++) {
-            String[] rows = grid.get(y);
             for (int z = 0; z < sz; z++) {
-                String row = rows[z];
+                String row = s.grid()[y][z];
                 for (int x = 0; x < sx; x++) {
                     BlockState st = palette.get(row.charAt(x));
                     if (st == null) {
@@ -129,7 +240,15 @@ public class SchemPaste {
                         continue;
                     }
                     if (st.isAir() && !withAir) continue;
-                    mp.set(origin.getX() + x, origin.getY() + y, origin.getZ() + z);
+
+                    int nx, nz;
+                    switch (rotation) {
+                        case 90 -> { nx = sz - 1 - z; nz = x; }
+                        case 180 -> { nx = sx - 1 - x; nz = sz - 1 - z; }
+                        case 270 -> { nx = z; nz = sx - 1 - x; }
+                        default -> { nx = x; nz = z; }
+                    }
+                    mp.set(origin.getX() + nx, origin.getY() + y, origin.getZ() + nz);
                     if (level.isOutsideBuildHeight(mp)) continue;
                     BlockState old = level.getBlockState(mp);
                     if (old == st) continue;
@@ -143,44 +262,20 @@ public class SchemPaste {
 
         UNDO.put(player.getUUID(), new Undo(level.dimension(), undoPos, undoStates));
 
-        final long count = placed;
-        final long skipped = unknown;
-        StringBuilder msg = new StringBuilder("Вставлено «" + name + "» в " + origin.getX() + " " + origin.getY() + " " + origin.getZ()
-                + " (" + sx + "×" + sy + "×" + sz + "), изменено блоков: " + count + ". Откат: /schem undo");
-        if (!missing.isEmpty()) {
-            msg.append("\nПропущены неизвестные блоки: ")
-                    .append(String.join(", ", missing.stream().limit(8).toList()))
-                    .append(missing.size() > 8 ? " …" : "");
+        MutableComponent msg = Msg.t("cmd.pasted", s.name(), origin.getX(), origin.getY(), origin.getZ(), rsx, sy, rsz, placed);
+        if (!s.missing().isEmpty()) {
+            String list = String.join(", ", s.missing().stream().limit(8).toList()) + (s.missing().size() > 8 ? " …" : "");
+            msg.append(Msg.t("cmd.missing", list));
         }
-        if (skipped > 0) {
-            msg.append("\nСимволов без записи в палитре: ").append(skipped);
+        if (unknown > 0) {
+            msg.append(Msg.t("cmd.unknown_symbols", unknown));
         }
-        src.sendSuccess(() -> Component.literal(msg.toString()), true);
+        src.sendSuccess(() -> msg, true);
         return 1;
     }
 
-    public static int undo(CommandSourceStack src) throws CommandSyntaxException {
-        ServerPlayer player = src.getPlayerOrException();
-        Undo u = UNDO.remove(player.getUUID());
-        if (u == null) {
-            return fail(src, "Нечего откатывать.");
-        }
-        ServerLevel level = src.getServer().getLevel(u.dim());
-        if (level == null) {
-            return fail(src, "Измерение недоступно.");
-        }
-        // Откат в обратном порядке.
-        for (int i = u.positions().size() - 1; i >= 0; i--) {
-            level.setBlock(u.positions().get(i), u.states().get(i), FLAGS);
-        }
-        final int n = u.positions().size();
-        src.sendSuccess(() -> Component.literal("Откат выполнен, блоков восстановлено: " + n
-                + " (содержимое сундуков и прочие данные блоков не восстанавливаются)."), true);
-        return 1;
-    }
-
-    private static int fail(CommandSourceStack src, String text) {
-        src.sendFailure(Component.literal(text));
+    private static int fail(CommandSourceStack src, MutableComponent text) {
+        src.sendFailure(text);
         return 0;
     }
 }
