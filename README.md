@@ -52,7 +52,7 @@ The green frame is the whole area that will be saved. Maximum size: 1,000,000 bl
 
 ## Installation
 
-Put the jar from `build/libs/` into the `mods` folder of the client (and of the server, if you play on one).
+Put the jar into the `mods` folder of the client (and of the server, if you play on one).
 The mod is required on both sides (NeoForge 1.21.1).
 
 ## Changelog
