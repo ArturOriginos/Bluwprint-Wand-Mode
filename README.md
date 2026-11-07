@@ -50,41 +50,9 @@ The green frame is the whole area that will be saved. Maximum size: 1,000,000 bl
   Blocks from missing mods are skipped and listed in chat.
 - Undo does not restore chest contents or other block data.
 
-## File format
-
-```json
-{
-  "format": "blueprintwand-1",
-  "size": {"x": 5, "y": 4, "z": 5},
-  "origin_world": {"x": 100, "y": 64, "z": -20},
-  "palette": {".": "minecraft:air", "A": "minecraft:stone_bricks"},
-  "layers": [
-    {"y": 0, "rows": ["AAAAA", "A...A", "A...A", "A...A", "AAAAA"]}
-  ]
-}
-```
-
-`layers[i]` is the horizontal slice at height `i` (0 = bottom), `rows[j]` is the row `z = j` (0 = north),
-the character index in a row is `x` (0 = west). Each character is a key of `palette`; `.` is air.
-
-Tip: send the `.json` to an AI assistant to review or redesign the build, then paste the edited file back.
-Keep `size`, the number of layers and the length of every row consistent.
-
-## Building
-
-Requires JDK 21 and Gradle 8.10+.
-
-```bash
-gradle wrapper        # once, creates gradlew
-./gradlew build       # the jar appears in build/libs/
-./gradlew runClient   # launch the game for testing
-```
-
-The NeoForge version is set in `build.gradle` (`neoForge { version = ... }`).
-
 ## Installation
 
-Put the jar from `build/libs/` into the `mods` folder of the client (and of the server, if you play on one).
+Put the jar into the `mods` folder of the client (and of the server, if you play on one).
 The mod is required on both sides (NeoForge 1.21.1).
 
 ## Changelog
