@@ -53,7 +53,8 @@
   "blueprintwand.gui.none": "Select a schematic from the list",
   "blueprintwand.gui.target": "Target: %s %s %s",
   "blueprintwand.gui.status_preview": "Preview active - press Place to build it",
-  "blueprintwand.gui.howto1": "1. Pick a schematic, rotation and position, then press Preview - a yellow frame appears in the world.",
+  "blueprintwand.gui.howto1": "1. Pick a schematic, rotation and position, then press Preview - a translucent copy of the build and a yellow frame appear.",
   "blueprintwand.gui.howto2": "2. Open this list again and press Place to build it (or type /schem confirm).",
-  "blueprintwand.gui.howto3": "Cancel removes the frame, Undo reverts the last paste. Operator rights are required."
+  "blueprintwand.gui.howto3": "Cancel removes the frame, Undo reverts the last paste. Operator rights are required.",
+  "blueprintwand.cmd.preview_no_ghost": "\nThe schematic has more than %s blocks, so only the frame is shown (no translucent blocks)."
 }

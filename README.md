@@ -11,7 +11,7 @@ Saved schematics can be previewed with a frame, rotated and pasted back.
 - "Blueprint Wand" item (looks like an enchanted stick). Recipe: stick + paper.
 - Two-point selection; the selected area is outlined while you hold the wand.
 - `/schem save <name>` writes `schematics/<name>.json` in the game folder.
-- `/schem preview <name> ...` shows a yellow frame where the schematic will be placed, `/schem confirm` pastes it.
+- `/schem preview <name> ...` shows the schematic as translucent blocks inside a yellow frame where it will be placed, `/schem confirm` pastes it. Builds above 40,000 non-air blocks show only the frame; blocks farther than 64 blocks from you are not drawn.
 - Saved schematic names from the `schematics` folder are suggested automatically while typing `/schem paste` and `/schem preview`.
 - `/schem paste <name> ...` pastes immediately, with optional rotation (90 / 180 / 270°).
 - `/schem undo` reverts the last paste.
@@ -89,6 +89,7 @@ The mod is required on both sides (NeoForge 1.21.1).
 
 ## Changelog
 
+- **1.4.0** — translucent block preview: `/schem preview` (and the list) shows the actual blocks of the schematic as a see-through ghost, with rotation applied.
 - **1.3.0** — "Schematic List" item: a GUI with all saved schematics, rotation / position options, preview and paste.
 - **1.2.1** — saved schematic names are suggested (Tab) in `/schem paste` and `/schem preview`.
 - **1.2.0** — rotation, frame preview (`/schem preview`, `/schem confirm`, `/schem cancel`), English translation.

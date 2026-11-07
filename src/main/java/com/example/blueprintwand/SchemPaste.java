@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.core.BlockPos;
@@ -32,6 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SchemPaste {
     /** 2 = отправить клиентам, 16 = без обновления соседей (ничего не отваливается и не падает). */
     private static final int FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
+    /** Максимум непустых блоков, которые отправляются клиенту для полупрозрачного предпросмотра. */
+    static final int GHOST_MAX_BLOCKS = 40_000;
 
     private record Schematic(String name, int sx, int sy, int sz, String[][] grid,
                              Map<Character, BlockState> palette, Set<String> missing) {}
@@ -63,9 +66,15 @@ public class SchemPaste {
         int rsx = swap ? s.sz() : s.sx();
         int rsz = swap ? s.sx() : s.sz();
 
+        PreviewPayload.Ghost ghost = buildGhost(s, rotation, rsx, rsz);
         PENDING.put(player.getUUID(), new Pending(s.name(), origin, rotation, withAir, level.dimension()));
-        PacketDistributor.sendToPlayer(player, new PreviewPayload(true, level.dimension().location(), origin, rsx, s.sy(), rsz));
-        src.sendSuccess(() -> Msg.t("cmd.preview", s.name(), origin.getX(), origin.getY(), origin.getZ(), rsx, s.sy(), rsz), false);
+        PacketDistributor.sendToPlayer(player,
+                new PreviewPayload(true, level.dimension().location(), origin, rsx, s.sy(), rsz, ghost));
+        MutableComponent msg = Msg.t("cmd.preview", s.name(), origin.getX(), origin.getY(), origin.getZ(), rsx, s.sy(), rsz);
+        if (ghost == null) {
+            msg.append(Msg.t("cmd.preview_no_ghost", GHOST_MAX_BLOCKS));
+        }
+        src.sendSuccess(() -> msg, false);
         return 1;
     }
 
@@ -272,6 +281,73 @@ public class SchemPaste {
         }
         src.sendSuccess(() -> msg, true);
         return 1;
+    }
+
+    private static int rotX(int rot, int x, int z, int sx, int sz) {
+        return switch (rot) {
+            case 90 -> sz - 1 - z;
+            case 180 -> sx - 1 - x;
+            case 270 -> z;
+            default -> x;
+        };
+    }
+
+    private static int rotZ(int rot, int x, int z, int sx, int sz) {
+        return switch (rot) {
+            case 90 -> x;
+            case 180 -> sz - 1 - z;
+            case 270 -> sx - 1 - x;
+            default -> z;
+        };
+    }
+
+    /** Палитра + RLE ячеек (с поворотом) для полупрозрачного предпросмотра. null — схематика слишком большая. */
+    private static PreviewPayload.Ghost buildGhost(Schematic s, int rotation, int rsx, int rsz) {
+        Rotation rot = switch (rotation) {
+            case 90 -> Rotation.CLOCKWISE_90;
+            case 180 -> Rotation.CLOCKWISE_180;
+            case 270 -> Rotation.COUNTERCLOCKWISE_90;
+            default -> Rotation.NONE;
+        };
+        int sx = s.sx(), sy = s.sy(), sz = s.sz();
+        int[] cells = new int[rsx * sy * rsz];
+        Map<BlockState, Integer> ids = new LinkedHashMap<>();
+        IntArrayList paletteIds = new IntArrayList();
+        int count = 0;
+
+        for (int y = 0; y < sy; y++) {
+            for (int z = 0; z < sz; z++) {
+                String row = s.grid()[y][z];
+                for (int x = 0; x < sx; x++) {
+                    BlockState st = s.palette().get(row.charAt(x));
+                    if (st == null || st.isAir()) continue;
+                    if (++count > GHOST_MAX_BLOCKS) return null;
+                    BlockState rs = st.rotate(rot);
+                    Integer idx = ids.get(rs);
+                    if (idx == null) {
+                        idx = ids.size() + 1;
+                        ids.put(rs, idx);
+                        paletteIds.add(Block.getId(rs));
+                    }
+                    int nx = rotX(rotation, x, z, sx, sz);
+                    int nz = rotZ(rotation, x, z, sx, sz);
+                    cells[(y * rsz + nz) * rsx + nx] = idx;
+                }
+            }
+        }
+
+        IntArrayList values = new IntArrayList();
+        IntArrayList lengths = new IntArrayList();
+        int i = 0;
+        while (i < cells.length) {
+            int v = cells[i];
+            int j = i + 1;
+            while (j < cells.length && cells[j] == v) j++;
+            values.add(v);
+            lengths.add(j - i);
+            i = j;
+        }
+        return new PreviewPayload.Ghost(paletteIds.toIntArray(), values.toIntArray(), lengths.toIntArray());
     }
 
     private static int fail(CommandSourceStack src, MutableComponent text) {
